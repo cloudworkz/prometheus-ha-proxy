@@ -1,0 +1,42 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-proxy
+  namespace: prometheus
+data:
+  default.conf: |-
+    upstream prometheus {
+      server prometheus-master:9090;
+      server prometheus-slave:9090 backup;
+    }
+
+    server {
+      server_name localhost;
+      listen 9190;
+      access_log off;
+
+      location / {
+        proxy_intercept_errors on;
+        error_page 400 403 404 502 503 504 = @fallback;
+
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP  $remote_addr;
+
+        proxy_pass http://prometheus;
+        proxy_next_upstream error timeout http_502 http_404 non_idempotent;
+        proxy_connect_timeout 1s;
+        proxy_next_upstream_timeout 5;
+        proxy_next_upstream_tries 1;
+      }
+
+      location @fallback {
+        proxy_pass http://prometheus-slave:9090;
+      }
+
+      location /healthz {
+        access_log off;
+        return 200;
+      }
+    }

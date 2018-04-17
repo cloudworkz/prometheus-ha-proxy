@@ -1,0 +1,154 @@
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: prometheus
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: prometheus
+
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: prometheus
+spec:
+  serviceName: prometheus
+  updateStrategy:
+    type: RollingUpdate
+  replicas: 2
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      name: prometheus
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      terminationGracePeriodSeconds: 10
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: "app"
+                    operator: In
+                    values:
+                    - prometheus
+              topologyKey: "kubernetes.io/hostname"
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+             - weight: 1
+               podAffinityTerm:
+                 labelSelector:
+                    matchExpressions:
+                      - key: "app"
+                        operator: In
+                        values:
+                        - prometheus
+                 topologyKey: "kubernetes.io/hostname"
+      securityContext:
+        fsGroup: 2000
+        runAsUser: 1000
+        runAsNonRoot: true
+
+      initContainers:
+      - name: init
+        image: quay.io/prometheus/prometheus
+        imagePullPolicy: Always
+        command:
+        - sh
+        args:
+        - /bootstrap/init.sh
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: bootstrap
+          mountPath: /bootstrap
+          readOnly: false
+
+      containers:
+      - name: prometheus
+        image: quay.io/prometheus/prometheus
+        imagePullPolicy: Always
+        args:
+          - '--storage.tsdb.retention=96h'
+          - '--storage.tsdb.path=/prometheus/data'
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+          - '--web.console.templates=/usr/share/prometheus/consoles'
+          - '--web.enable-lifecycle'
+          - '--log.level=info'
+        ports:
+        - name: web
+          containerPort: 9090
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: web
+          initialDelaySeconds: 600
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: web
+          initialDelaySeconds: 600
+          timeoutSeconds: 30
+        resources:
+          requests:
+            cpu: 0.5
+            memory: 1Gi
+          limits:
+            cpu: 1
+            memory: 1Gi
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/etc/prometheus"
+        - name: prometheus-storage
+          mountPath: "/prometheus/data"
+
+      - name: configmap-reload
+        image: jimmidyson/configmap-reload
+        imagePullPolicy: Always
+        args:
+            - --volume-dir=/etc/prometheus
+            - --webhook-url=http://localhost:9090/-/reload
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/etc/prometheus"
+          readOnly: true
+
+      volumes:
+      - name: config-volume
+        configMap:
+          name: prometheus
+          items:
+          - key: prometheus.yml
+            path: prometheus.yml
+      - name: bootstrap
+        configMap:
+          name: prometheus
+          items:
+          - key: init.sh
+            path: init.sh
+
+  volumeClaimTemplates:
+  - metadata:
+      name: prometheus-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: standard

@@ -1,0 +1,52 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: prometheus-proxy
+  namespace: prometheus
+spec:
+  replicas: 4
+  minReadySeconds: 15
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: prometheus-proxy
+    spec:
+      containers:
+      - name: prometheus-proxy
+        image: nginx:alpine
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9190
+          name: prometheus
+        - containerPort: 9290
+          name: prometheus-kpi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: prometheus
+            scheme: HTTP
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: prometheus
+            scheme: HTTP
+        resources:
+          requests:
+            cpu: 0
+            memory: 10Mi
+          limits:
+            cpu: 0.1
+            memory: 50Mi
+        volumeMounts:
+        - name: config
+          mountPath: "/etc/nginx/conf.d"
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-proxy
